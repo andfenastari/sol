@@ -3,6 +3,7 @@ use tokenizer::Tokenizer;
 use parser::parse;
 
 fn main() {
+	//tokenizer_repl();
 	parser_repl();
 }
 
