@@ -24,276 +24,132 @@ pub enum Node {
 		args: Box<[Ast]>,
 	},
 	IfExpr {
-		conds: Box<[IfCond]>,
+		conds: Box<[Ast]>,
 		thens: Box<[Ast]>,
 		r#else: Box<Ast>,
 	},
 }
 
-#[derive(Debug, Clone)]
-pub enum IfCond {
-	Expr(Box<Ast>),
-	Let(LetList),
+struct Parser<'a> {
+	peeked: Option<Token<'a>>,
+	tokenizer: Tokenizer<'a>,
 }
 
-#[derive(Debug, Clone)]
-pub enum Pattern {
-	Ident(String),
-	// TODO: Add table and literal patterns (and also maybe value patterns between parentheses? eg. let a = 1 let (a) = 2 in "Not reached because error")
+pub fn parse(src: &str) -> ParseResult<Ast> {
+	Parser::new(src).parse_expr()
 }
 
-#[derive(Debug, Clone)]
-pub struct LetList {
-	pats: Box<[Pattern]>,
-	exprs: Box<[Ast]>,
-}
-
-pub fn parse(input: &str) -> ParseResult<Ast> {
-	let mut t = Tokenizer::new(input);
-	parse_expr(&mut t)
-}
-
-/// expr
-///   = funcall
-///   | letexpr
-///   | ifexpr
-///   | ident
-///   | numlit
-///   | strlit
-fn parse_expr(t: &mut Tokenizer) -> ParseResult<Ast> {
-	let checkpoint = t.clone();
-
-	if let n@Ok(_) = parse_funcall(t) {
-		return n
-	}
-
-	*t = checkpoint;
-	if let n@Ok(_) = dbg!(parse_ifexpr(t)) {
-		return n;
-	}
-
-	*t = checkpoint;
-	if let n@Ok(_) = parse_ident(t) {
-		return n;
-	}
-
-	*t = checkpoint;
-	if let n@Ok(_) = parse_numlit(t) {
-		return n;
-	}
-
-	*t = checkpoint;
-	if let n@Ok(_) = parse_strlit(t) {
-		return n;
-	}
-
-	*t = checkpoint;
-	let tok = next_token(t)?;
-	Err(Error {
-		location: tok.location,
-		description: format!("Expected expression, got {:?}", tok.kind),
-	})
-}
-
-/// funcall = simple_expr simple_expr+
-fn parse_funcall(t: &mut Tokenizer) -> ParseResult<Ast> {
-	let fun = parse_simple_expr(t)?;
-
-	let mut checkpoint = t.clone();
-	let mut args = Vec::new();
-	while let Ok(arg) = parse_simple_expr(t) {
-		checkpoint = t.clone();
-		args.push(arg);
-	}
-	*t = checkpoint;
-	if args.len() < 1 {
-		Err(Error {
-			location: fun.location,
-			description: "Expected 1 or more arguments to function call".to_string(),
-		})
-	} else {
-		Ok(Ast {
-			location: fun.location,
-			node: Node::Funcall {
-				fun: Box::new(fun),
-				args: args.into_boxed_slice(),
-			}
-		})
-	}
-}
-
-/// simple_expr
-///   = ident
-///   | numlit
-///   | strlit
-///   | LParen expr RParen
-fn parse_simple_expr(t: &mut Tokenizer) -> ParseResult<Ast> {
-	let checkpoint = t.clone();
-
-	if let n@Ok(_) = parse_ident(t) {
-		return n;
-	}
-
-	*t = checkpoint;
-	if let n@Ok(_) = parse_numlit(t) {
-		return n;
-	}
-
-	*t = checkpoint;
-	if let n@Ok(_) = parse_strlit(t) {
-		return n;
-	}
-
-	*t = checkpoint;
-	expect_token(t, TokenKind::LParen)?;
-	let expr = parse_expr(t)?;
-	expect_token(t, TokenKind::RParen)?;
-	Ok(expr)
-}
-
-/// ifexpr = (If ifcond Then expr)+ Else expr
-fn parse_ifexpr(t: &mut Tokenizer) -> ParseResult<Ast> {
-	let location = t.location();
-	let mut checkpoint = t.clone();
-	let mut conds = Vec::new();
-	let mut thens = Vec::new();
-
-	while expect_token(t, TokenKind::If).is_ok() {
-		let cond = parse_ifcond(t)?;
-		expect_token(t, TokenKind::Then)?;
-		let then = parse_expr(t)?;
-
-		checkpoint = t.clone();
-		conds.push(cond);
-		thens.push(then);
-	}
-	*t = checkpoint;
-	if conds.len() < 1 {
-		return Err(Error {
-			location,
-			description: String::new(),
-		})
-	}
-
-	expect_token(t, TokenKind::Else)?;
-	let r#else = parse_expr(t)?;
-	Ok(Ast {
-		location,
-		node: Node::IfExpr {
-			conds: conds.into_boxed_slice(),
-			thens: thens.into_boxed_slice(),
-			r#else: Box::new(r#else),
-		},
-	})
-}
-
-/// ifcond
-///   = letlist
-///   | expr
-fn parse_ifcond(t: &mut Tokenizer) -> ParseResult<IfCond> {
-	let mut checkpoint = t.clone();
-
-	if let Ok(lst) = parse_letlist(t) {
-		checkpoint = t.clone();
-		if expect_token(t, TokenKind::Then).is_ok() {
-			*t = checkpoint; // Reset tokenizer because otherwise the Then token would be consumed
-			return Ok(IfCond::Let(lst));
+impl<'a> Parser<'a> {
+	fn new(src: &'a str) -> Self {
+		Parser {
+			peeked: None,
+			tokenizer: Tokenizer::new(src),
 		}
 	}
 
-	*t = checkpoint;
-	let expr = parse_expr(t)?;
-	Ok(IfCond::Expr(Box::new(expr)))
-}
-
-/// letlist = (Let pattern Eq expr)+
-fn parse_letlist(t: &mut Tokenizer) -> ParseResult<LetList> {
-	let mut checkpoint = t.clone();
-	let mut pats = Vec::new();
-	let mut exprs = Vec::new();
-
-	while expect_token(t, TokenKind::Let).is_ok() {
-		let pat = parse_pattern(t)?;
-		expect_token(t, TokenKind::Eq)?;
-		let expr = parse_expr(t)?;
-
-		checkpoint = t.clone();
-		pats.push(pat);
-		exprs.push(expr);
-	}
-	*t = checkpoint;
-
-	if pats.len() < 1 {
-		return Err(Error {
-			location: t.location(),
-			description: String::new(),
-		})
+	fn current_location(&self) -> Location {
+		self.tokenizer.location()
 	}
 
-	Ok(LetList {
-		pats: pats.into_boxed_slice(),
-		exprs: exprs.into_boxed_slice(),
-	})
-}
+	fn advance(&mut self) {
+		if self.peeked.is_some() {
+			self.peeked = None;
+		} else {
+			self.tokenizer.next();
+		}
+	}
 
-/// pattern = ident
-fn parse_pattern(t: &mut Tokenizer) -> ParseResult<Pattern> {
-	let ident = expect_token(t, TokenKind::Ident)?;
-	Ok(Pattern::Ident(ident.text.to_string()))
-}
+	fn peek(&mut self) -> Option<Token<'a>> {
+		if let Some(tok) = self.peeked {
+			Some(tok)
+		} else {
+			self.peeked = self.tokenizer.next();
+			self.peeked
+		}
+	}
 
-fn parse_letexpr_from_letlist(t: &mut Tokenizer, _lst: LetList) -> ParseResult<Ast> {
-	return Err(Error {
-		location: t.location(),
-		description: "Unimplemented!".to_string(),
-	})
-}
+	fn expect_token(&mut self, kind: TokenKind) -> ParseResult<Token<'a>> {
+		if let Some(tok) = self.peek() {
+			if tok.kind == kind {
+				self.advance();
+				Ok(tok)
+			} else {
+				Err(Error {
+					location: tok.location,
+					description: format!("Expected {:?}, but got {:?}", kind, tok.kind),
+				})
+			}
+		} else {
+			Err(Error {
+				location: self.current_location(),
+				description: format!("Expected {:?}, but got EOF", kind),
+			})
+		}
+	}
 
-/// ident = Ident
-fn parse_ident(t: &mut Tokenizer) -> ParseResult<Ast> {
-	let tok = expect_token(t, TokenKind::Ident)?;
-	Ok(Ast {
-		location: tok.location,
-		node: Node::Ident(tok.text.to_string()),
-	})
-}
+	fn parse_expr(&mut self) -> ParseResult<Ast> {
+		println!("\tparse_expr");
+		if let Ok(fcall) = self.parse_funcall_or_delimited_expression() {
+			return Ok(fcall)
+		}
+		self.parse_atom()
+	}
 
-/// numlit = NumLit
-fn parse_numlit(t: &mut Tokenizer) -> ParseResult<Ast> {
-	let tok = expect_token(t, TokenKind::NumLit)?;
-	if let Ok(n) = tok.text.parse::<f32>() {
+	// A delimited expression is an atom or an arbitrary expression
+	// delimited by parenthesis
+	fn parse_delimited_expr(&mut self) -> ParseResult<Ast> {
+		println!("\tparse_delimited");
+		if let Ok(atom) = self.parse_atom() {
+			return Ok(atom)
+		}
+		self.parse_paren_expr()
+	}
+
+	fn parse_paren_expr(&mut self) -> ParseResult<Ast> {
+		println!("\tparse_paren_expr");
+		self.expect_token(TokenKind::LParen)?;
+		let expr = self.parse_expr()?;
+		self.expect_token(TokenKind::RParen)?;
+		Ok(expr)
+	}
+
+	// An atom is an identifier or a literal
+	fn parse_atom(&mut self) -> ParseResult<Ast> {
+		println!("\tparse_atom");
+		// TODO: parse literals
+		self.parse_ident()
+	}
+
+	fn parse_ident(&mut self) -> ParseResult<Ast> {
+		println!("\tparse_ident");
+		let ident = self.expect_token(TokenKind::Ident)?;
 		Ok(Ast {
-			location: tok.location,
-			node: Node::NumLit(n),
-		})
-	} else {
-		panic!("Unreachable: Tokenizer should only accept valid number literal values");
-	}
-}
-
-/// strlit = StrLit
-fn parse_strlit(t: &mut Tokenizer) -> ParseResult<Ast> {
-	let tok = expect_token(t, TokenKind::StrLit)?;
-	Ok(Ast {
-		location: tok.location,
-		node: Node::StrLit(tok.text[1..tok.text.len()-1].to_string()), // Remove quotes
-	})
-}
-
-fn next_token<'a>(t: &mut Tokenizer<'a>) -> ParseResult<Token<'a>> {
-	t.next().ok_or(Error {
-		location: t.location(),
-		description: "End of input".to_string(),
-	})
-} 
-
-fn expect_token<'a>(t: &mut Tokenizer<'a>, kind: TokenKind) -> ParseResult<Token<'a>> {
-	let tok = next_token(t)?;
-	if tok.kind != kind {
-		return Err(Error {
-			location: tok.location,
-			description: format!("Expected token {:?}, got {:?}", kind, tok.kind),
+			location: ident.location,
+			node: Node::Ident(ident.text.to_string()),
 		})
 	}
-	Ok(tok)
+
+	// A funcall is one or more delimited expressions in sequence
+	fn parse_funcall_or_delimited_expression(&mut self) -> ParseResult<Ast> {
+		println!("\tparse_funcall");
+		let loc = self.current_location();
+		let fun = self.parse_delimited_expr()?;
+		
+		let mut args = Vec::new();
+		while let Ok(arg) = self.parse_delimited_expr() {
+			args.push(arg);	
+		}
+		// A funcall needs at least one argument
+		if args.len() == 0 {
+			return Ok(fun)
+		}
+
+		Ok(Ast {
+			location: loc,
+			node: Node::Funcall {
+				fun: Box::new(fun),
+				args: args.into(),
+			}
+		})
+	}
 }
