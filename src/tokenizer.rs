@@ -18,6 +18,8 @@ pub enum TokenKind {
 	Operator,
 	StrLit,
 	NumLit,
+	True,
+	False,
 	LParen,
 	RParen,
 	LCurly,
@@ -56,10 +58,6 @@ impl<'a> Tokenizer<'a> {
 				offset: 0,
 			},
 		}
-	}
-
-	pub fn location(&self) -> Location {
-		self.location
 	}
 
 	fn current(&self) -> Option<char> {
@@ -135,12 +133,14 @@ impl<'a> Iterator for Tokenizer<'a> {
 				self.advance();
 			}
 			match self.current_text().unwrap() {
-				"let"  => return self.emit_token(TokenKind::Let),
-				"in"   => return self.emit_token(TokenKind::In),
-				"if"   => return self.emit_token(TokenKind::If),
-				"then" => return self.emit_token(TokenKind::Then),
-				"else" => return self.emit_token(TokenKind::Else),
-				_      => return self.emit_token(TokenKind::Ident), 
+				"let"   => return self.emit_token(TokenKind::Let),
+				"in"    => return self.emit_token(TokenKind::In),
+				"if"    => return self.emit_token(TokenKind::If),
+				"then"  => return self.emit_token(TokenKind::Then),
+				"else"  => return self.emit_token(TokenKind::Else),
+				"true"  => return self.emit_token(TokenKind::True),
+				"false" => return self.emit_token(TokenKind::False),
+				_       => return self.emit_token(TokenKind::Ident), 
 			}
 		}
 
@@ -176,11 +176,16 @@ impl<'a> Iterator for Tokenizer<'a> {
 
 		// String literals
 		if c == '"' {
-			while let Some(n) = self.peek() {
-				self.advance();
-				if n == '"' { break }
-				// Escape sequence, skip next character
-				if n == '\\' { self.advance(); }
+			loop {
+				if let Some(n) = self.peek() {
+					self.advance();
+					if n == '"' { break }
+					// Escape sequence, skip next character
+					if n == '\\' { self.advance(); }
+				} else {
+					// No closing quote
+					return self.emit_token(TokenKind::Unknown);
+				}
 			}
 			return self.emit_token(TokenKind::StrLit);
 		}
