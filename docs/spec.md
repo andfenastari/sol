@@ -87,11 +87,8 @@ Std é `snake_case` para valores e funções e `PascalCase` para módulos
 ### 2.3 Palavras reservadas
 
 ```
-let in if then else import true false nil and or not
+let in if then else end case import true false nil and or not
 ```
-
-(`match`/`case`/`with`/`of` podem entrar dependendo da sintaxe de match
-escolhida, seção 9.)
 
 ### 2.4 Números
 
@@ -146,6 +143,7 @@ file      = expr EOF ;
 
 expr      = let_expr
           | if_expr
+          | case_expr
           | lambda
           | pipe ;
 
@@ -153,10 +151,19 @@ expr      = let_expr
 let_expr  = binding { binding } "in" expr ;
 binding   = "let" pattern "=" expr ;
 
-(* if encadeado: só o último ramo tem else *)
+(* if encadeado: só o último ramo tem else; ou fecha com end *)
 if_expr   = "if" expr "then" expr
             { "if" expr "then" expr }
-            "else" expr ;
+            chain_end ;
+
+(* case: os mesmos ramos do if, mas com padrões no lugar de condições *)
+case_expr = "case" expr
+            "if" pattern "then" expr
+            { "if" pattern "then" expr }
+            chain_end ;
+
+chain_end = "else" expr                 (* ramo padrão *)
+          | "end" ;                     (* sem ramo padrão: exaustivo *)
 
 lambda    = "\" pattern { pattern } "->" expr ;
 
@@ -189,7 +196,7 @@ list      = "[" [ expr { "," expr } [ "," ] ] "]" ;
 
 pattern   = "_"
           | ident
-          | literal                     (* só em match, seção 9 *)
+          | literal                     (* só em case, seção 9 *)
           | table_pat
           | list_pat
           | "(" pattern ")" ;
@@ -209,7 +216,7 @@ Da menor para a maior:
 
 | Nível | Construção                        | Associatividade |
 |-------|-----------------------------------|-----------------|
-| 1     | `let … in`, `if`, `\x ->`         | estende ao máximo para a direita |
+| 1     | `let … in`, `if`, `case`, `\x ->` | estende ao máximo para a direita |
 | 2     | `\|>`                             | esquerda        |
 | 3     | `or`                              | esquerda        |
 | 4     | `and`                             | esquerda        |
@@ -229,12 +236,12 @@ Consequências:
   o acesso liga mais forte que a aplicação.
 - `f -1` é a subtração `f - 1`; para passar um negativo use `f (-1)`.
 - `not a == b` é `(not a) == b`.
-- `let`, `if` e lambdas só aparecem em posição de expressão completa (início
+- `let`, `if`, `case` e lambdas só aparecem em posição de expressão completa (início
   de arquivo, corpo de `let`/lambda, ramos de `if`, dentro de parênteses,
   valores de table e itens de lista). Como argumento ou operando precisam de
   parênteses: `List.map (\x -> x + 1) xs`, `1 + (if c then 1 else 2)`.
 
-### 3.2 Como as construções sem `end` terminam
+### 3.2 Como as construções terminam
 
 Sem indentação significativa, cada construção termina pelo próximo token que
 não pode continuá-la:
@@ -245,16 +252,27 @@ não pode continuá-la:
   a uma construção interna. Por isso, no exemplo, o bloco interno
   `let add … let sub … in { add, sub }` termina em `{ add, sub }` e o
   `let eval` seguinte volta a ser do bloco externo.
-- Um ramo `then e` termina no próximo `if` (novo ramo) ou `else` (último
-  ramo).
-- `let` e `if` aninhados são **gulosos**: um `if` dentro de um ramo `then`
-  consome os ramos seguintes. Para aninhar de outro jeito, use parênteses:
+- Um ramo `then e` termina no próximo `if` (novo ramo), `else` (último
+  ramo) ou `end` (fim da cadeia).
+- `if` e `case` aninhados num ramo `then` consomem os ramos seguintes até o
+  seu próprio `else` ou `end`. Quando o aninhado fecha com `end`, não há
+  ambiguidade e os ramos seguintes voltam para o externo:
 
   ```sol
-  if a then (if b then x else y)
-  if c then z
-  else w
+  case ast
+    if { type = "num", value } then
+      case value
+        if 0 then "zero"
+      end                     -- fecha o case interno
+    if { type = "str" } then "string"
+  end
   ```
+
+  Se o aninhado fecha com `else e`, o `e` termina no primeiro token que não o
+  continua, então um `if` seguinte também volta para o externo:
+  `if a then (if b then x else y) if c then z end` pode ser escrito sem os
+  parênteses. Os parênteses só são necessários quando o próprio `e` é outro
+  `if`/`case` aberto.
 
 ---
 
@@ -349,8 +367,18 @@ verdadeiro.
 resultado é `e1`; senão, passa para `c2`, e assim por diante; se nenhum
 for verdadeiro, o resultado é `en`.
 
-**[Aberto]** O `else` final é obrigatório (provisório). Alternativa: opcional,
-com erro `nenhum ramo do if foi escolhido` em tempo de execução.
+Se a cadeia fecha com `end` em vez de `else`, ela é **exaustiva**: se nenhuma
+condição for verdadeira, é erro em tempo de execução
+(`nenhum ramo do if foi escolhido`, com a posição do `if`). Como tudo é lazy,
+o erro só acontece se o valor for forçado.
+
+```sol
+let sign = \n ->
+  if n > 0 then 1
+  if n < 0 then -1
+  if n == 0 then 0
+  end
+```
 
 ### 5.4 Operadores
 
@@ -418,7 +446,7 @@ Padrões aparecem em parâmetros de lambda e em `let`, e na v0 são
   usados. `\{ast, result} -> …` aplicada a algo que não é table só falha
   quando `ast` ou `result` forem usados.
 
-Padrões literais (`1`, `"binop"`) e padrões refutáveis existem só no `match`
+Padrões literais (`1`, `"binop"`) e padrões refutáveis existem só no `case`
 (seção 9).
 
 ---
@@ -475,72 +503,63 @@ mínimo para escrever a Std em Sol:
 
 ---
 
-## 9. `match`: propostas
+## 9. `case`
 
-Nenhuma entra na v0 sem a escolha do André. As três usam os mesmos padrões da
-seção 6, acrescidos de literais, e todas tentam os ramos em ordem, com erro se
-nenhum casar. A diferença é só a sintaxe. Exemplo comum: reescrever `eval`.
-
-### Proposta A — `match … with` com `|` (estilo ML)
+`case` é o `if` encadeado com padrões no lugar de condições:
 
 ```sol
 let eval = \ast ->
-  match ast with
-  | { type = "literal", value } -> value
-  | { type = "binop", op, lhs, rhs } -> ops.(op) (eval lhs) (eval rhs)
-  | { type } -> error "Unknown ast type \(type)"
+  case ast
+    if { type = "literal", value } then value
+    if { type = "binop", op, lhs, rhs } then ops.(op) (eval lhs) (eval rhs)
+    if { type } then error "Unknown ast type \(type)"
+  end
 ```
 
-- Conhecida por quem vem de OCaml/F#/Elm.
-- Precisa de duas palavras novas (`match`, `with`). Um `match` aninhado no
-  último ramo engole os ramos seguintes (mesma regra gulosa do `if`), então
-  precisa de parênteses.
-
-### Proposta B — `case … of { }` com chaves e vírgulas
+- `case x` avalia `x` sob demanda e tenta os ramos em ordem; o primeiro padrão
+  que casar escolhe o ramo, e os nomes ligados pelo padrão valem só nele.
+- Os padrões são os da seção 6, acrescidos de literais (`1`, `"binop"`,
+  `true`, `nil`), que casam por `==`. Dentro de um padrão de table, um literal
+  restringe o valor do campo: `{ type = "literal" }` casa só se `type` existir
+  e for igual a `"literal"`.
+- Aqui os padrões são **refutáveis**: se um não casar, passa para o próximo
+  ramo. Um padrão de table contra algo que não é table, ou de lista contra
+  algo que não é lista, simplesmente não casa.
+- O casamento força só o necessário para decidir: no exemplo, `ast` e
+  `ast.type` são forçados, mas `value`, `lhs` e `rhs` não.
+- Um identificador num padrão sempre **liga** um nome novo, nunca compara com
+  uma variável existente. Para comparar com um valor calculado, use `if`.
+- Fechamento igual ao `if`:
+  - `else e` é o ramo padrão, sem padrão nem ligações;
+  - `end` torna o `case` exaustivo: se nenhum ramo casar, é erro em tempo de
+    execução (`nenhum ramo do case casou`, com a posição do `case` e o tipo
+    do valor).
 
 ```sol
-let eval = \ast ->
-  case ast of {
-    { type = "literal", value } -> value,
-    { type = "binop", op, lhs, rhs } -> ops.(op) (eval lhs) (eval rhs),
-    { type } -> error "Unknown ast type \(type)",
-  }
+let describe = \n ->
+  case n
+    if 0 then "zero"
+    if 1 then "um"
+    else "muitos"
+
+let sum = \xs ->
+  case xs
+    if [] then 0
+    if [x, ...rest] then x + sum rest
+  end
 ```
 
-- Delimitada: começa e termina sem ambiguidade, aninha sem parênteses.
-- Mesmo estilo visual das tables (chaves, vírgulas, vírgula final).
-- Mais ruído visual, com `{` do bloco e `{` do padrão lado a lado.
-
-### Proposta C — lambda com vários ramos `\| …` (recomendada)
+**[Aberto]** Guardas, para combinar padrão e condição no mesmo ramo. Candidato:
 
 ```sol
-let eval =
-  \| { type = "literal", value } -> value
-   | { type = "binop", op, lhs, rhs } -> ops.(op) (eval lhs) (eval rhs)
-   | { type } -> error "Unknown ast type \(type)"
-
--- casar um valor qualquer é só aplicar a lambda a ele
-let describe = \x ->
-  x |> (\| 0 -> "zero"
-         | n -> "outro: \(n)")
+case n
+  if { type = "num", value } when value < 0 then "negativo"
+  if { type = "num" } then "não negativo"
+end
 ```
 
-(Pela regra da seção 3.1 a lambda precisa de parênteses depois do `|>`. Se C
-for escolhida, vale a pena permitir lambda como último operando, pergunta 9.)
-
-- Generaliza o que a linguagem já tem: `\{ast, result} -> …` já é uma lambda
-  com um padrão; `\| p1 -> e1 | p2 -> e2` é a mesma coisa com vários ramos.
-- Não precisa de palavras novas, e casa bem com `|>`.
-- Combina com o estilo funcional do resto: funções definidas por casos.
-- Ramos com vários parâmetros: `\| [] acc -> acc | [x, ...xs] acc -> …`.
-- Mesma regra gulosa de A para aninhamento.
-
-### Extensão opcional para qualquer proposta: guardas
-
-```sol
-\| { type = "num", value } if value < 0 -> "negativo"
- | { type = "num" } -> "não negativo"
-```
+(acrescentaria a palavra `when`). Sem guardas, o mesmo se escreve com um `if`
+aninhado no ramo.
 
 ---
 
@@ -550,8 +569,7 @@ for escolhida, vale a pena permitir lambda como último operando, pergunta 9.)
   embutível, em que o programa hospedeiro define o protocolo (por exemplo, o
   valor do programa descreve requisições que o host executa).
 - Imports remotos (URLs de verdade): a v0 só lê do disco.
-- Captura de erros (`try`), tipos estáticos, módulos com interface explícita,
-  sintaxe de `match` (até a escolha da seção 9).
+- Captura de erros (`try`), tipos estáticos, módulos com interface explícita.
 
 ### 10.1 Saída de `sol eval`
 
@@ -564,17 +582,15 @@ funções como `<function>`). Código de saída 0 em sucesso e 1 em erro
 
 ## 11. Perguntas abertas
 
-1. **`match`:** proposta A, B ou C (seção 9)? Com ou sem guardas?
+1. **Guardas no `case`:** `if p when c then …` (seção 9) ou nenhuma na v0?
 2. **Chave ausente:** `t.k` retorna `nil` (provisório) ou dá erro?
 3. **Listas:** tipo separado (provisório) ou tables com chaves inteiras? Índice
    base 0 (provisório) ou 1?
 4. **Números:** só `f64` (provisório) ou inteiro + float?
 5. **Verdade:** `if`/`and`/`or` exigem boolean (provisório) ou seguem Lua
    (`nil` e `false` são falsos)?
-6. **`else` final:** obrigatório (provisório) ou opcional com erro em tempo de
-   execução?
-7. **Diferente:** `!=` (provisório) ou `~=`?
-8. **Builtins:** globais (provisório) ou dentro de uma table?
-9. **Lambda como último argumento:** permitir `List.map \x -> x + 1` sem
+6. **Diferente:** `!=` (provisório) ou `~=`?
+7. **Builtins:** globais (provisório) ou dentro de uma table?
+8. **Lambda como último argumento:** permitir `List.map \x -> x + 1` sem
    parênteses (como o `BlockArguments` do Haskell)? Provisório: não.
-10. **Comentário de bloco:** nenhum (provisório) ou `{- … -}`?
+9. **Comentário de bloco:** nenhum (provisório) ou `{- … -}`?
