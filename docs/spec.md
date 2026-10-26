@@ -549,17 +549,8 @@ let sum = \xs ->
   end
 ```
 
-**[Aberto]** Guardas, para combinar padrão e condição no mesmo ramo. Candidato:
-
-```sol
-case n
-  if { type = "num", value } when value < 0 then "negativo"
-  if { type = "num" } then "não negativo"
-end
-```
-
-(acrescentaria a palavra `when`). Sem guardas, o mesmo se escreve com um `if`
-aninhado no ramo.
+Guardas (combinar padrão e condição no mesmo ramo) ficam para depois da v0;
+por enquanto, use um `if` aninhado no ramo.
 
 ---
 
@@ -569,7 +560,8 @@ aninhado no ramo.
   embutível, em que o programa hospedeiro define o protocolo (por exemplo, o
   valor do programa descreve requisições que o host executa).
 - Imports remotos (URLs de verdade): a v0 só lê do disco.
-- Captura de erros (`try`), tipos estáticos, módulos com interface explícita.
+- Captura de erros (`try`), tipos estáticos, módulos com interface explícita,
+  guardas no `case`.
 
 ### 10.1 Saída de `sol eval`
 
@@ -582,15 +574,14 @@ funções como `<function>`). Código de saída 0 em sucesso e 1 em erro
 
 ## 11. Perguntas abertas
 
-1. **Guardas no `case`:** `if p when c then …` (seção 9) ou nenhuma na v0?
-2. **Chave ausente:** `t.k` retorna `nil` (provisório) ou dá erro?
-3. **Listas:** tipo separado (provisório) ou tables com chaves inteiras? Índice
+1. **Chave ausente:** `t.k` retorna `nil` (provisório) ou dá erro?
+2. **Listas:** tipo separado (provisório) ou tables com chaves inteiras? Índice
    base 0 (provisório) ou 1?
-4. **Números:** só `f64` (provisório) ou inteiro + float?
-5. **Verdade:** `if`/`and`/`or` exigem boolean (provisório) ou seguem Lua
+3. **Números:** só `f64` (provisório) ou inteiro + float?
+4. **Verdade:** `if`/`and`/`or` exigem boolean (provisório) ou seguem Lua
    (`nil` e `false` são falsos)?
-6. **Diferente:** `!=` (provisório) ou `~=`?
-7. **Builtins:** globais (provisório) ou dentro de uma table?
-8. **Lambda como último argumento:** permitir `List.map \x -> x + 1` sem
+5. **Diferente:** `!=` (provisório) ou `~=`?
+6. **Builtins:** globais (provisório) ou dentro de uma table?
+7. **Lambda como último argumento:** permitir `List.map \x -> x + 1` sem
    parênteses (como o `BlockArguments` do Haskell)? Provisório: não.
-9. **Comentário de bloco:** nenhum (provisório) ou `{- … -}`?
+8. **Comentário de bloco:** nenhum (provisório) ou `{- … -}`?
