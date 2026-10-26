@@ -100,9 +100,9 @@ digits = [0-9] ( [0-9] | "_" )*
 Exemplos: `0`, `42`, `3.14`, `1e9`, `1_000_000`. Não há literal negativo: `-1`
 é o operador unário `-` aplicado a `1`.
 
-**[Aberto]** Representação: a v0 usa um único tipo numérico (`f64`, como Lua
-5.1). Números inteiros são impressos sem `.0`. Alternativa: inteiro e float
-separados (como Lua 5.3).
+Um literal sem `.` e sem expoente é um `int` (inteiro de 64 bits com sinal);
+com `.` ou expoente é um `float` (`f64`). Então `1` é `int` e `1.0` e `1e3` são
+`float`. Literal inteiro que não cabe em 64 bits é erro léxico.
 
 ### 2.5 Strings
 
@@ -125,11 +125,11 @@ o `)` que fecha a interpolação.
 ### 2.6 Operadores e pontuação
 
 ```
-+  -  *  /  %  ++  ==  !=  <  <=  >  >=  |>
-\  ->  =  .  ,  (  )  {  }  [  ]
++  -  *  /  //  %  ++  ==  !=  <  <=  >  >=  |>  <|  ??
+\  ->  =  .  ?.  ,  (  )  {  }  [  ]
 ```
 
-**[Aberto]** Diferente: `!=` (provisório) ou `~=` (Lua).
+O lexer é guloso: `//` é um token só, assim como `?.` e `??`.
 
 ---
 
@@ -145,7 +145,7 @@ expr      = let_expr
           | if_expr
           | case_expr
           | lambda
-          | pipe ;
+          | rpipe ;
 
 (* bloco let: uma ou mais definições seguidas de um único `in` *)
 let_expr  = binding { binding } "in" expr ;
@@ -167,18 +167,23 @@ chain_end = "else" expr                 (* ramo padrão *)
 
 lambda    = "\" pattern { pattern } "->" expr ;
 
+(* pipe reverso: o lado direito é uma expressão completa *)
+rpipe     = pipe [ "<|" expr ] ;
 pipe      = or_expr  { "|>" or_expr } ;
 or_expr   = and_expr { "or" and_expr } ;
 and_expr  = cmp_expr { "and" cmp_expr } ;
-cmp_expr  = concat [ cmp_op concat ] ;
+cmp_expr  = coalesce [ cmp_op coalesce ] ;
 cmp_op    = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+coalesce  = concat [ "??" coalesce ] ;
 concat    = add_expr [ "++" concat ] ;
 add_expr  = mul_expr { ("+" | "-") mul_expr } ;
-mul_expr  = unary { ("*" | "/" | "%") unary } ;
+mul_expr  = unary { ("*" | "/" | "//" | "%") unary } ;
 unary     = ("-" | "not") unary
           | app ;
 app       = postfix { postfix } ;
-postfix   = atom { "." ident | "." "(" expr ")" } ;
+postfix   = atom { access } ;
+access    = ( "." | "?." ) ident
+          | ( "." | "?." ) "(" expr ")" ;
 
 atom      = number | string | "true" | "false" | "nil"
           | ident
@@ -217,21 +222,30 @@ Da menor para a maior:
 | Nível | Construção                        | Associatividade |
 |-------|-----------------------------------|-----------------|
 | 1     | `let … in`, `if`, `case`, `\x ->` | estende ao máximo para a direita |
-| 2     | `\|>`                             | esquerda        |
-| 3     | `or`                              | esquerda        |
-| 4     | `and`                             | esquerda        |
-| 5     | `==` `!=` `<` `<=` `>` `>=`       | nenhuma (`a < b < c` é erro) |
-| 6     | `++`                              | direita         |
-| 7     | `+` `-`                           | esquerda        |
-| 8     | `*` `/` `%`                       | esquerda        |
-| 9     | unários `-` `not`                 | prefixo         |
-| 10    | aplicação `f x y`                 | esquerda        |
-| 11    | acesso `t.k`, `t.(e)`             | esquerda (pós-fixo) |
+| 2     | `<\|`                             | direita         |
+| 3     | `\|>`                             | esquerda        |
+| 4     | `or`                              | esquerda        |
+| 5     | `and`                             | esquerda        |
+| 6     | `==` `!=` `<` `<=` `>` `>=`       | nenhuma (`a < b < c` é erro) |
+| 7     | `??`                              | direita         |
+| 8     | `++`                              | direita         |
+| 9     | `+` `-`                           | esquerda        |
+| 10    | `*` `/` `//` `%`                  | esquerda        |
+| 11    | unários `-` `not`                 | prefixo         |
+| 12    | aplicação `f x y`                 | esquerda        |
+| 13    | acesso `t.k`, `t.(e)`, `t?.k`, `t?.(e)` | esquerda (pós-fixo) |
 
 Consequências:
 
 - `x |> f a |> g` é `g (f a x)`. O `|>` aplica o lado direito ao esquerdo:
   `x |> f` = `f x`.
+- `f <| g <| x` é `f (g x)`, como o `$` do Haskell. O lado direito do `<|`
+  é uma expressão completa, então pode ser um `let`, `if`, `case` ou lambda
+  sem parênteses: `List.all <| List.map (\c -> c.ok) cases`,
+  `with_default <| \x -> x + 1`.
+- Misturando os dois, o `<|` liga mais fraco: `f <| x |> g` é `f (g x)`.
+- `t.x? ?? 0` não existe: o `?` faz parte do acesso, `t?.x ?? 0`.
+- `a ?? 0 + 1` é `a ?? (0 + 1)`; `a ?? 0 == 1` é `(a ?? 0) == 1`.
 - `ops.(ast.op) ast.lhs ast.rhs` é `(ops.(ast.op)) (ast.lhs) (ast.rhs)`:
   o acesso liga mais forte que a aplicação.
 - `f -1` é a subtração `f - 1`; para passar um negativo use `f (-1)`.
@@ -284,7 +298,8 @@ Sol tem tipagem dinâmica. Os tipos de valor são:
 |------------|--------------------------------|------------|
 | `nil`      | `nil`                          | ausência de valor |
 | `boolean`  | `true`, `false`                | |
-| `number`   | `1`, `2.5`                     | ver 2.4 |
+| `int`      | `1`, `-42`                     | inteiro de 64 bits |
+| `float`    | `2.5`, `1e9`                   | `f64` |
 | `string`   | `"oi"`, `"x = \(x)"`           | imutável, UTF-8 |
 | `list`     | `[1, 2, 3]`                    | sequência indexada |
 | `table`    | `{ a = 1, ("b" ++ "c") = 2 }`  | mapa chave → valor |
@@ -294,8 +309,9 @@ Todos os valores são imutáveis.
 
 ### 4.1 Tables
 
-- Chaves podem ser `string`, `number` ou `boolean`. Usar `nil`, uma lista,
-  uma table ou uma função como chave é erro.
+- Chaves podem ser `string`, `int`, `float` ou `boolean`. Um `float` com valor
+  inteiro é normalizado para `int` (`t.(1.0)` é `t.(1)`); `NaN` como chave é
+  erro. Usar `nil`, uma lista, uma table ou uma função como chave é erro.
 - `{ k = v }` com `k` identificador é açúcar para `{ ("k") = v }`.
 - `{ k }` é açúcar para `{ k = k }`.
 - `{ (e) = v }` usa o valor de `e` como chave (espelho de `t.(e)`). A chave é
@@ -303,18 +319,23 @@ Todos os valores são imutáveis.
 - Chave repetida em um literal é erro.
 - A ordem de inserção é preservada (para impressão e para `keys`).
 - `t.k` é açúcar para `t.("k")`.
-- **[Aberto]** Acessar uma chave ausente retorna `nil` (como Lua). Diferente de
-  Lua, um campo com valor `nil` continua existindo como chave: decidir se a
-  chave existe nunca força o valor. Alternativa: chave ausente é erro.
+- Acessar uma chave ausente com `t.k` ou `t.(e)` é **erro**
+  (`chave "k" não existe`, com a posição).
+- `t?.k` e `t?.(e)` são o acesso opcional: retornam `nil` se a chave não
+  existir ou se `t` for `nil`. Então dá para encadear: `cfg?.server?.port`.
+  Se `t` não for `nil` nem table (nem lista, para `?.(i)`), continua sendo erro.
+- `a ?? b` é `a` se `a` não for `nil`, e `b` caso contrário. O `b` só é
+  avaliado se necessário: `cfg?.port ?? 8080`.
+- Um campo com valor `nil` existe como chave: decidir se a chave existe nunca
+  força o valor. `{ a = nil }.a` é `nil`, sem erro.
 
 ### 4.2 Listas
 
 - `[a, b, c]` cria uma lista de tamanho fixo com elementos lazy.
-- `l.(i)` acessa o elemento `i`. Índice fora do intervalo é erro.
-- **[Aberto]** Base do índice: 0 (provisório) ou 1 (como Lua).
-- **[Aberto]** Listas são um tipo separado de table (provisório) ou tables com
-  chaves inteiras, como em Lua. Tipo separado deixa a implementação mais
-  simples e as mensagens de erro mais claras.
+- Listas são um tipo separado de table.
+- `l.(i)` acessa o elemento `i`, com índice começando em **0**. O índice deve ser
+  `int` (um `float` com valor inteiro também é aceito). Índice fora do
+  intervalo é erro; `l?.(i)` retorna `nil` nesse caso.
 
 ### 4.3 Funções
 
@@ -325,9 +346,9 @@ Todos os valores são imutáveis.
 
 ### 4.4 Verdade
 
-**[Aberto]** `if`, `and`, `or` e `not` exigem `boolean`; qualquer outro valor é
-erro (provisório). Alternativa Lua: `nil` e `false` são falsos e o resto é
-verdadeiro.
+`if`, `and`, `or` e `not` exigem `boolean`; qualquer outro valor é erro. Não
+existe "truthy": `if t?.k then …` é erro quando o resultado é `nil`; use
+`if t?.k != nil then …`.
 
 ---
 
@@ -382,22 +403,32 @@ let sign = \n ->
 
 ### 5.4 Operadores
 
+Abaixo, "número" é `int` ou `float`.
+
 | Operador            | Operandos                  | Resultado |
 |---------------------|----------------------------|-----------|
-| `+ - * /`           | number                     | number |
-| `%`                 | number                     | resto com o sinal do divisor (como Lua) |
-| `-x`                | number                     | number |
+| `+ - *`             | número                     | `int` se os dois forem `int`; senão `float` |
+| `/`                 | número                     | sempre `float` (`7 / 2` = `3.5`) |
+| `//`                | número                     | divisão arredondada para baixo: `int` se os dois forem `int` (`7 // 2` = `3`, `-7 // 2` = `-4`); senão `float` (`7.5 // 2` = `3.0`) |
+| `%`                 | número                     | resto de `//`, com o sinal do divisor (`-7 % 2` = `1`); mesma regra de tipo |
+| `-x`                | número                     | mesmo tipo |
 | `++`                | string ++ string, list ++ list | concatenação |
-| `< <= > >=`         | number/number ou string/string | boolean (strings em ordem de bytes) |
+| `< <= > >=`         | número/número ou string/string | boolean (números por valor; strings em ordem de bytes) |
 | `== !=`             | quaisquer                  | boolean |
+| `??`                | qualquer, qualquer         | lado esquerdo se não for `nil`, senão o direito |
 | `and or`            | boolean                    | boolean, curto-circuito |
 | `not`               | boolean                    | boolean |
 | `x \|> f`           | qualquer, função           | `f x` |
+| `f <\| x`           | função, qualquer           | `f x` |
 
-- Divisão por zero segue IEEE 754 (`1/0` = `inf`).
+- Em operações com `int`, overflow é erro (`9223372036854775807 + 1`).
+- `//` e `%` com divisor `int` zero são erro. Com `float`, a divisão segue
+  IEEE 754 (`1 / 0` = `inf`, `0.0 / 0` = `NaN`).
+- Não há conversão automática entre números e strings.
 - `==` é igualdade estrutural: números por valor, strings por conteúdo, listas
   elemento a elemento, tables pelo mesmo conjunto de chaves com valores iguais.
-  Valores de tipos diferentes são diferentes (`1 == "1"` é `false`). Comparar
+  `int` e `float` são comparados por valor (`1 == 1.0` é `true`). Fora isso,
+  valores de tipos diferentes são diferentes (`1 == "1"` é `false`). Comparar
   funções é erro. A comparação força só o necessário e para na primeira
   diferença.
 - Qualquer outra combinação de tipos é erro, com os tipos na mensagem.
@@ -405,7 +436,8 @@ let sign = \n ->
 ### 5.5 Interpolação
 
 `"a \(e) b"` é equivalente a `"a " ++ to_string e ++ " b"`, onde `to_string`
-converte `string` (sem aspas), `number`, `boolean` e `nil`. Interpolar list,
+converte `string` (sem aspas), `int`, `float`, `boolean` e `nil`. Um `float`
+sempre aparece com parte decimal (`1.0`, `2.5`, `1e+20`). Interpolar list,
 table ou função é erro na v0.
 
 ### 5.6 Erros
@@ -487,13 +519,14 @@ mínimo para escrever a Std em Sol:
 | Nome             | Tipo                     | Descrição |
 |------------------|--------------------------|-----------|
 | `error`          | string → ⊥               | aborta a avaliação (5.6) |
-| `type_of`        | any → string             | `"nil"`, `"boolean"`, `"number"`, `"string"`, `"list"`, `"table"`, `"function"` |
-| `length`         | list/string → number     | tamanho (strings em bytes na v0) |
+| `type_of`        | any → string             | `"nil"`, `"boolean"`, `"int"`, `"float"`, `"string"`, `"list"`, `"table"`, `"function"` |
+| `length`         | list/string → int        | tamanho (strings em bytes na v0) |
 | `keys`           | table → list             | chaves em ordem de inserção |
 | `has`            | table → key → boolean    | se a chave existe |
 | `to_string`      | any → string             | conversão da seção 5.5 |
-| `to_number`      | string → number/nil      | `nil` se não for número |
-| `floor`          | number → number          | arredonda para baixo |
+| `parse_number`   | string → int/float/nil   | lê um literal numérico; `nil` se não for número |
+| `floor`          | número → int             | arredonda para baixo (erro se não couber em `int`) |
+| `to_float`       | número → float           | converte para `float` |
 
 `map`, `filter`, `fold`, `all` etc. ficam na Std (`List.sol`), escritos em Sol
 (passo 4).
@@ -574,14 +607,8 @@ funções como `<function>`). Código de saída 0 em sucesso e 1 em erro
 
 ## 11. Perguntas abertas
 
-1. **Chave ausente:** `t.k` retorna `nil` (provisório) ou dá erro?
-2. **Listas:** tipo separado (provisório) ou tables com chaves inteiras? Índice
-   base 0 (provisório) ou 1?
-3. **Números:** só `f64` (provisório) ou inteiro + float?
-4. **Verdade:** `if`/`and`/`or` exigem boolean (provisório) ou seguem Lua
-   (`nil` e `false` são falsos)?
-5. **Diferente:** `!=` (provisório) ou `~=`?
-6. **Builtins:** globais (provisório) ou dentro de uma table?
-7. **Lambda como último argumento:** permitir `List.map \x -> x + 1` sem
-   parênteses (como o `BlockArguments` do Haskell)? Provisório: não.
-8. **Comentário de bloco:** nenhum (provisório) ou `{- … -}`?
+1. **Builtins:** globais (provisório) ou dentro de uma table?
+2. **Lambda como último argumento:** permitir `List.map \x -> x + 1` sem
+   parênteses (como o `BlockArguments` do Haskell)? Provisório: não, já que
+   `<|` cobre a maior parte dos casos.
+3. **Comentário de bloco:** nenhum (provisório) ou `{- … -}`?
