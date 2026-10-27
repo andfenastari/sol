@@ -126,10 +126,11 @@ o `)` que fecha a interpolação.
 
 ```
 +  -  *  /  //  %  ++  ==  !=  <  <=  >  >=  |>  <|  ??
-\  ->  =  .  ?.  ,  (  )  {  }  [  ]
+\  ->  =  .  ?  ,  (  )  {  }  [  ]
 ```
 
-O lexer é guloso: `//` é um token só, assim como `?.` e `??`.
+O lexer é guloso: `//` e `??` são um token só. `?` sozinho é o acesso
+opcional (4.1), então `t?k??0` vira `t ? k ?? 0` sem ambiguidade.
 
 ---
 
@@ -182,8 +183,8 @@ unary     = ("-" | "not") unary
           | app ;
 app       = postfix { postfix } ;
 postfix   = atom { access } ;
-access    = ( "." | "?." ) ident
-          | ( "." | "?." ) "(" expr ")" ;
+access    = ( "." | "?" ) ident
+          | ( "." | "?" ) "(" expr ")" ;
 
 atom      = number | string | "true" | "false" | "nil"
           | ident
@@ -233,7 +234,7 @@ Da menor para a maior:
 | 10    | `*` `/` `//` `%`                  | esquerda        |
 | 11    | unários `-` `not`                 | prefixo         |
 | 12    | aplicação `f x y`                 | esquerda        |
-| 13    | acesso `t.k`, `t.(e)`, `t?.k`, `t?.(e)` | esquerda (pós-fixo) |
+| 13    | acesso `t.k`, `t.(e)`, `t?k`, `t?(e)` | esquerda (pós-fixo) |
 
 Consequências:
 
@@ -244,7 +245,7 @@ Consequências:
   sem parênteses: `List.all <| List.map (\c -> c.ok) cases`,
   `with_default <| \x -> x + 1`.
 - Misturando os dois, o `<|` liga mais fraco: `f <| x |> g` é `f (g x)`.
-- `t.x? ?? 0` não existe: o `?` faz parte do acesso, `t?.x ?? 0`.
+- O `?` toma o lugar do ponto: `t?x ?? 0` é `(t?x) ?? 0`.
 - `a ?? 0 + 1` é `a ?? (0 + 1)`; `a ?? 0 == 1` é `(a ?? 0) == 1`.
 - `ops.(ast.op) ast.lhs ast.rhs` é `(ops.(ast.op)) (ast.lhs) (ast.rhs)`:
   o acesso liga mais forte que a aplicação.
@@ -321,11 +322,11 @@ Todos os valores são imutáveis.
 - `t.k` é açúcar para `t.("k")`.
 - Acessar uma chave ausente com `t.k` ou `t.(e)` é **erro**
   (`chave "k" não existe`, com a posição).
-- `t?.k` e `t?.(e)` são o acesso opcional: retornam `nil` se a chave não
-  existir ou se `t` for `nil`. Então dá para encadear: `cfg?.server?.port`.
-  Se `t` não for `nil` nem table (nem lista, para `?.(i)`), continua sendo erro.
+- `t?k` e `t?(e)` são o acesso opcional: retornam `nil` se a chave não
+  existir ou se `t` for `nil`. Então dá para encadear: `cfg?server?port`.
+  Se `t` não for `nil` nem table (nem lista, para `?(i)`), continua sendo erro.
 - `a ?? b` é `a` se `a` não for `nil`, e `b` caso contrário. O `b` só é
-  avaliado se necessário: `cfg?.port ?? 8080`.
+  avaliado se necessário: `cfg?port ?? 8080`.
 - Um campo com valor `nil` existe como chave: decidir se a chave existe nunca
   força o valor. `{ a = nil }.a` é `nil`, sem erro.
 
@@ -335,7 +336,7 @@ Todos os valores são imutáveis.
 - Listas são um tipo separado de table.
 - `l.(i)` acessa o elemento `i`, com índice começando em **0**. O índice deve ser
   `int` (um `float` com valor inteiro também é aceito). Índice fora do
-  intervalo é erro; `l?.(i)` retorna `nil` nesse caso.
+  intervalo é erro; `l?(i)` retorna `nil` nesse caso.
 
 ### 4.3 Funções
 
@@ -347,8 +348,8 @@ Todos os valores são imutáveis.
 ### 4.4 Verdade
 
 `if`, `and`, `or` e `not` exigem `boolean`; qualquer outro valor é erro. Não
-existe "truthy": `if t?.k then …` é erro quando o resultado é `nil`; use
-`if t?.k != nil then …`.
+existe "truthy": `if t?k then …` é erro quando o resultado é `nil`; use
+`if t?k != nil then …`.
 
 ---
 
